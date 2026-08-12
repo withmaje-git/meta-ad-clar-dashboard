@@ -230,10 +230,15 @@ def dual_axis_chart(g: pd.DataFrame):
         secondary_y=True,
     )
     if "roas7" in g.columns:
+        # 화면에 보이는 마지막 2일(오늘·어제)만 점 위에 7일 누적 ROAS 숫자 표기
+        n = len(g)
+        roas7_labels = [f"{r:.1f}" if i >= n - 2 else ""
+                        for i, r in enumerate(g["roas7"])]
         fig.add_trace(
             go.Scatter(x=g["date"], y=g["roas7"], name="최근7일 누적 ROAS(초록)",
-                       mode="lines+markers", line=dict(color="#10b981", width=3, dash="dot"),
-                       marker=dict(size=6),
+                       mode="lines+markers+text", line=dict(color="#10b981", width=3),
+                       marker=dict(size=6), text=roas7_labels, textposition="bottom center",
+                       textfont=dict(size=11, color="#047857"),
                        hovertemplate="최근7일 누적 ROAS %{y:.2f}<extra></extra>"),
             secondary_y=True,
         )
@@ -280,7 +285,7 @@ def multiline_spend_with_roas(g: pd.DataFrame, series_col: str):
 st.header("① 캠페인 · 광고세트별 — 지출(막대) & ROAS(선 2개)")
 st.caption("캠페인 아래 광고세트마다 개별 그래프. 파란 막대=일별 지출(왼쪽 축), "
            "주황 선=당일 ROAS(점 위 숫자=그날 ROAS 1자리), "
-           "초록 점선=최근 7일 누적 ROAS(그날 포함 직전 7일 매출합÷지출합, ROAS 추이). "
+           "초록 실선=최근 7일 누적 ROAS(그날 포함 직전 7일 매출합÷지출합, ROAS 추이). "
            "ROAS는 오른쪽 축. 회색 점선=ROAS 1.0(본전).")
 
 campaigns = (
