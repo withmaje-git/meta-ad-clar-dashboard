@@ -57,10 +57,16 @@ df_all = df_raw[df_raw["date"] >= WINDOW_START].copy()
 
 date_min, date_max = df_all["date"].min(), df_all["date"].max()
 
-# ==================== 어제(최신일) 지출 0 항목 제외 ====================
-# 캠페인·광고세트·소재 각 레벨에서 최신일 지출이 0이면(=이미 중단) 제외.
+# ==================== 최근 N일 지출 0 항목 제외 ====================
+# 캠페인·광고세트·소재 각 레벨에서 "최근 ACTIVE_WINDOW_DAYS일" 동안 지출이 한 번도
+# 없으면(=사실상 중단) 제외한다. 최신일 하루만 보면, 최신일이 당일 부분집계이거나
+# 특정 세트가 그날 하루 지출을 건너뛴 경우 운영중인데도 빠지는 문제가 있어 창(window)으로 판정.
+ACTIVE_WINDOW_DAYS = 3
+ACTIVE_START = LATEST - pd.Timedelta(days=ACTIVE_WINDOW_DAYS - 1)
+
 def active_names(col: str) -> set:
-    return set(df_all[(df_all["date"] == LATEST) & (df_all["spend"] > 0)][col])
+    recent = df_all[(df_all["date"] >= ACTIVE_START) & (df_all["spend"] > 0)]
+    return set(recent[col])
 
 ACT_CAMP = active_names("campaign")
 ACT_ADSET = active_names("adset")
@@ -87,7 +93,7 @@ DAILY_LABEL_MIN = st.sidebar.number_input(
     help="선그래프 점 위 ROAS 숫자는 그날 지출이 이 값 이상일 때만 표시합니다.",
 )
 if excl_camp or excl_adset or excl_ad:
-    with st.sidebar.expander(f"제외됨 (어제 지출 0)", expanded=False):
+    with st.sidebar.expander(f"제외됨 (최근 {ACTIVE_WINDOW_DAYS}일 지출 0)", expanded=False):
         st.caption(f"캠페인 {len(excl_camp)} · 광고세트 {len(excl_adset)} · 소재 {len(excl_ad)}")
         for x in excl_camp: st.write("· (캠페인) " + x)
         for x in excl_adset: st.write("· (세트) " + x)
@@ -98,7 +104,7 @@ st.title("🏢 광고 성과 대시보드")
 st.caption(
     f"기간: {date_min:%Y-%m-%d} ~ {date_max:%Y-%m-%d} (최근 14일)  ·  "
     f"결과=omni_purchase 기준  ·  "
-    f"어제({LATEST:%m-%d}) 지출 0인 캠페인·세트·소재는 제외"
+    f"최근 {ACTIVE_WINDOW_DAYS}일({ACTIVE_START:%m-%d}~{LATEST:%m-%d}) 지출 0인 캠페인·세트·소재는 제외"
 )
 
 # ==================== 즉시 조치 요약 ====================
@@ -175,6 +181,26 @@ st.divider()
 PALETTE = px.colors.qualitative.Plotly + px.colors.qualitative.Set2 + px.colors.qualitative.Dark24
 
 
+FULL_DATES = pd.date_range(df_raw["date"].min(), LATEST, freq="D")
+
+
+def adset_series_with_roll(adset_name: str) -> pd.DataFrame:
+    """한 광고세트의 일별 지출/전환값을 전체 이력에서 뽑아
+    당일 ROAS와 최근 7일(당일 포함) 누적 ROAS를 계산한 뒤 표시창(14일)으로 자른다.
+    창 밖(과거) 데이터까지 써야 창 첫날들의 7일 누적값도 정확하다.
+    날짜 공백은 0으로 채워 7일 누적이 '달력 7일' 기준이 되게 한다."""
+    a = (df_raw[df_raw["adset"] == adset_name]
+         .groupby("date")[["spend", "purchase_value"]].sum()
+         .reindex(FULL_DATES, fill_value=0))
+    a.index.name = "date"
+    a = a.reset_index()
+    a["roas"] = (a["purchase_value"] / a["spend"]).where(a["spend"] > 0, 0)
+    roll_s = a["spend"].rolling(7, min_periods=1).sum()
+    roll_v = a["purchase_value"].rolling(7, min_periods=1).sum()
+    a["roas7"] = (roll_v / roll_s).where(roll_s > 0, 0)
+    return a[a["date"] >= WINDOW_START].copy()
+
+
 def daily_spend_roas(d: pd.DataFrame, group_col: str) -> pd.DataFrame:
     g = d.groupby(["date", group_col]).agg(
         spend=("spend", "sum"), purchase_value=("purchase_value", "sum"),
@@ -184,7 +210,8 @@ def daily_spend_roas(d: pd.DataFrame, group_col: str) -> pd.DataFrame:
 
 
 def dual_axis_chart(g: pd.DataFrame):
-    """지출 막대 + ROAS 선(점 위 숫자) 이중축 그래프. 제목/합계는 그래프 밖에서 표기."""
+    """지출 막대 + 당일 ROAS 선 + 최근 7일 누적 ROAS 선(막대1·선2) 이중축 그래프.
+    제목/합계는 그래프 밖에서 표기. g에는 spend, roas(당일), roas7(최근7일 누적) 필요."""
     g = g.sort_values("date")
     labels = [f"{r:.1f}" if s > 0 else "" for s, r in zip(g["spend"], g["roas"])]
     fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -195,13 +222,21 @@ def dual_axis_chart(g: pd.DataFrame):
         secondary_y=False,
     )
     fig.add_trace(
-        go.Scatter(x=g["date"], y=g["roas"], name="ROAS(주황)",
+        go.Scatter(x=g["date"], y=g["roas"], name="당일 ROAS(주황)",
                    mode="lines+markers+text", line=dict(color="#f59e0b", width=3),
                    marker=dict(size=7), text=labels, textposition="top center",
                    textfont=dict(size=11, color="#b45309"),
-                   hovertemplate="ROAS %{y:.2f}<extra></extra>"),
+                   hovertemplate="당일 ROAS %{y:.2f}<extra></extra>"),
         secondary_y=True,
     )
+    if "roas7" in g.columns:
+        fig.add_trace(
+            go.Scatter(x=g["date"], y=g["roas7"], name="최근7일 누적 ROAS(초록)",
+                       mode="lines+markers", line=dict(color="#10b981", width=3, dash="dot"),
+                       marker=dict(size=6),
+                       hovertemplate="최근7일 누적 ROAS %{y:.2f}<extra></extra>"),
+            secondary_y=True,
+        )
     fig.add_hline(y=1.0, line_dash="dot", line_color="gray", secondary_y=True)
     fig.update_layout(
         height=330, hovermode="x unified", margin=dict(t=44, b=0),
@@ -242,9 +277,11 @@ def multiline_spend_with_roas(g: pd.DataFrame, series_col: str):
 
 
 # ==================== 1단계: 캠페인 · 광고세트별 (각 세트마다 이중축) ====================
-st.header("① 캠페인 · 광고세트별 — 지출(막대) & ROAS(선)")
+st.header("① 캠페인 · 광고세트별 — 지출(막대) & ROAS(선 2개)")
 st.caption("캠페인 아래 광고세트마다 개별 그래프. 파란 막대=일별 지출(왼쪽 축), "
-           "주황 선=ROAS(오른쪽 축), 점 위 숫자=그날 ROAS(소수점 1자리). 회색 점선=ROAS 1.0(본전).")
+           "주황 선=당일 ROAS(점 위 숫자=그날 ROAS 1자리), "
+           "초록 점선=최근 7일 누적 ROAS(그날 포함 직전 7일 매출합÷지출합, ROAS 추이). "
+           "ROAS는 오른쪽 축. 회색 점선=ROAS 1.0(본전).")
 
 campaigns = (
     df_adset.groupby("campaign")["spend"].sum().sort_values(ascending=False).index.tolist()
@@ -257,12 +294,9 @@ for camp in campaigns:
     st.caption(f"캠페인 합계 · 지출 ₩{c_spend:,.0f} · ROAS {c_roas:.2f}")
     adsets_in = cdf.groupby("adset")["spend"].sum().sort_values(ascending=False).index
     for aset in adsets_in:
-        g = cdf[cdf["adset"] == aset].groupby("date").agg(
-            spend=("spend", "sum"), purchase_value=("purchase_value", "sum"),
-        ).reset_index()
+        g = adset_series_with_roll(aset)
         if g["spend"].sum() <= 0:
             continue
-        g["roas"] = (g["purchase_value"] / g["spend"]).where(g["spend"] > 0, 0)
         a_spend = g["spend"].sum(); a_val = g["purchase_value"].sum()
         a_roas = a_val / a_spend if a_spend else 0
         st.markdown(f"**{aset}**  ·  지출 ₩{a_spend:,.0f} · ROAS {a_roas:.2f}")
