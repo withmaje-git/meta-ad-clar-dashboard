@@ -201,6 +201,22 @@ def adset_series_with_roll(adset_name: str) -> pd.DataFrame:
     return a[a["date"] >= WINDOW_START].copy()
 
 
+def campaign_series_with_roll(campaign_name: str) -> pd.DataFrame:
+    """한 캠페인의 일별 지출/전환값을 전체 이력에서 뽑아 당일 ROAS와
+    최근 7일(당일 포함) 누적 ROAS를 계산한 뒤 표시창(14일)으로 자른다.
+    창 밖(과거) 데이터까지 써야 창 첫날들의 7일 누적값도 정확하다."""
+    a = (df_raw[df_raw["campaign"] == campaign_name]
+         .groupby("date")[["spend", "purchase_value"]].sum()
+         .reindex(FULL_DATES, fill_value=0))
+    a.index.name = "date"
+    a = a.reset_index()
+    a["roas"] = (a["purchase_value"] / a["spend"]).where(a["spend"] > 0, 0)
+    roll_s = a["spend"].rolling(7, min_periods=1).sum()
+    roll_v = a["purchase_value"].rolling(7, min_periods=1).sum()
+    a["roas7"] = (roll_v / roll_s).where(roll_s > 0, 0)
+    return a[a["date"] >= WINDOW_START].copy()
+
+
 def daily_spend_roas(d: pd.DataFrame, group_col: str) -> pd.DataFrame:
     g = d.groupby(["date", group_col]).agg(
         spend=("spend", "sum"), purchase_value=("purchase_value", "sum"),
@@ -281,8 +297,27 @@ def multiline_spend_with_roas(g: pd.DataFrame, series_col: str):
     st.plotly_chart(fig, width="stretch")
 
 
-# ==================== 1단계: 캠페인 · 광고세트별 (각 세트마다 이중축) ====================
-st.header("① 캠페인 · 광고세트별 — 지출(막대) & ROAS(선 2개)")
+# ==================== 1단계: 캠페인별 (구매 전환 캠페인 성과) ====================
+st.header("① 캠페인별 — 지출(막대) & ROAS(선)")
+st.caption("구매 전환 캠페인마다 개별 그래프. 파란 막대=일별 지출(왼쪽 축), "
+           "주황 선=당일 ROAS(점 위 숫자=그날 ROAS 1자리), "
+           "초록 실선=최근 7일 누적 ROAS. ROAS는 오른쪽 축. 회색 점선=ROAS 1.0(본전).")
+
+camp_only = (
+    df_camp.groupby("campaign")["spend"].sum().sort_values(ascending=False).index.tolist()
+)
+for camp in camp_only:
+    g = campaign_series_with_roll(camp)
+    if g["spend"].sum() <= 0:
+        continue
+    c_spend = g["spend"].sum(); c_val = g["purchase_value"].sum()
+    c_roas = c_val / c_spend if c_spend else 0
+    st.markdown(f"**📁 {camp}**  ·  지출 ₩{c_spend:,.0f} · ROAS {c_roas:.2f}")
+    dual_axis_chart(g)
+st.divider()
+
+# ==================== 2단계: 캠페인 · 광고세트별 (각 세트마다 이중축) ====================
+st.header("② 캠페인 · 광고세트별 — 지출(막대) & ROAS(선 2개)")
 st.caption("캠페인 아래 광고세트마다 개별 그래프. 파란 막대=일별 지출(왼쪽 축), "
            "주황 선=당일 ROAS(점 위 숫자=그날 ROAS 1자리), "
            "초록 실선=최근 7일 누적 ROAS(그날 포함 직전 7일 매출합÷지출합, ROAS 추이). "
@@ -308,8 +343,8 @@ for camp in campaigns:
         dual_axis_chart(g)
     st.divider()
 
-# ==================== 2단계: 소재별 (광고세트별로 분리한 다중 선) ====================
-st.header("② 소재별 — 광고세트별로 분리 (지출 선 + ROAS 라벨)")
+# ==================== 3단계: 소재별 (광고세트별로 분리한 다중 선) ====================
+st.header("③ 소재별 — 광고세트별로 분리 (지출 선 + ROAS 라벨)")
 st.caption("광고세트마다 그 안의 소재별 일별 지출 선. 점 위 숫자=그날 ROAS(소수점 1자리). "
            "범례(소재명)는 그래프 아래 가운데에 표시됩니다.")
 
