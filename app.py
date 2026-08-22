@@ -55,6 +55,14 @@ LATEST = df_raw["date"].max()
 WINDOW_START = LATEST - pd.Timedelta(days=13)
 df_all = df_raw[df_raw["date"] >= WINDOW_START].copy()
 
+# 참여 목표 캠페인 제외(요청): 구매 전환 캠페인만 본다. 이름이 바뀔 수 있어 접두어로 매칭.
+# 대시보드 전 구간(KPI·조치 요약·그래프)에서 숨김.
+EXCLUDE_PREFIXES = ("참여",)
+_excl = df_all["campaign"].apply(lambda c: any(str(c).startswith(p) for p in EXCLUDE_PREFIXES))
+df_all = df_all[~_excl].copy()
+df_raw = df_raw[~df_raw["campaign"].apply(
+    lambda c: any(str(c).startswith(p) for p in EXCLUDE_PREFIXES))].copy()
+
 date_min, date_max = df_all["date"].min(), df_all["date"].max()
 
 # ==================== 최근 N일 지출 0 항목 제외 ====================
