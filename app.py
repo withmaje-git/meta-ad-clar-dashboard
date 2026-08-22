@@ -225,9 +225,10 @@ def daily_spend_roas(d: pd.DataFrame, group_col: str) -> pd.DataFrame:
     return g
 
 
-def dual_axis_chart(g: pd.DataFrame):
+def dual_axis_chart(g: pd.DataFrame, key: str | None = None):
     """지출 막대 + 당일 ROAS 선 + 최근 7일 누적 ROAS 선(막대1·선2) 이중축 그래프.
-    제목/합계는 그래프 밖에서 표기. g에는 spend, roas(당일), roas7(최근7일 누적) 필요."""
+    제목/합계는 그래프 밖에서 표기. g에는 spend, roas(당일), roas7(최근7일 누적) 필요.
+    key: 동일 데이터 그래프가 여러 개일 때 ID 충돌을 막기 위한 고유 키."""
     g = g.sort_values("date")
     labels = [f"{r:.1f}" if s > 0 else "" for s, r in zip(g["spend"], g["roas"])]
     fig = make_subplots(specs=[[{"secondary_y": True}]])
@@ -265,7 +266,7 @@ def dual_axis_chart(g: pd.DataFrame):
     )
     fig.update_yaxes(title_text="지출(원)", secondary_y=False, rangemode="tozero")
     fig.update_yaxes(title_text="ROAS", secondary_y=True, rangemode="tozero")
-    st.plotly_chart(fig, width="stretch")
+    st.plotly_chart(fig, width="stretch", key=key)
 
 
 def multiline_spend_with_roas(g: pd.DataFrame, series_col: str):
@@ -313,7 +314,7 @@ for camp in camp_only:
     c_spend = g["spend"].sum(); c_val = g["purchase_value"].sum()
     c_roas = c_val / c_spend if c_spend else 0
     st.markdown(f"**📁 {camp}**  ·  지출 ₩{c_spend:,.0f} · ROAS {c_roas:.2f}")
-    dual_axis_chart(g)
+    dual_axis_chart(g, key=f"camp::{camp}")
 st.divider()
 
 # ==================== 2단계: 캠페인 · 광고세트별 (각 세트마다 이중축) ====================
@@ -340,7 +341,7 @@ for camp in campaigns:
         a_spend = g["spend"].sum(); a_val = g["purchase_value"].sum()
         a_roas = a_val / a_spend if a_spend else 0
         st.markdown(f"**{aset}**  ·  지출 ₩{a_spend:,.0f} · ROAS {a_roas:.2f}")
-        dual_axis_chart(g)
+        dual_axis_chart(g, key=f"adset::{camp}::{aset}")
     st.divider()
 
 # ==================== 3단계: 소재별 (광고세트별로 분리한 다중 선) ====================
